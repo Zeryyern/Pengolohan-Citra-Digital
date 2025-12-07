@@ -1,142 +1,109 @@
-import csv
+# plot_param_sweep.py (FINAL FIXED VERSION)
 import os
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+import csv
+import glob
 import numpy as np
 from collections import defaultdict
-import argparse
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
-def plot_sweep(csv_path, out_dir):
-    """Plot parameter sweep results from CSV."""
-    
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
-    
-    # Read CSV (format: W, seed_ratio, sigma, PSNR)
+
+def load_all_csv(patterns):
     rows = []
-    with open(csv_path, newline='') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append({
-                'W': float(row['W']),
-                'seed_ratio': float(row['seed_ratio']),
-                'sigma': float(row['sigma']),
-                'PSNR': float(row['PSNR'])
-            })
-    
-    if len(rows) == 0:
-        print("No data in CSV. Exiting.")
-        return
-    
-    # Extract unique values
-    W_values = sorted(set(r['W'] for r in rows))
-    seed_values = sorted(set(r['seed_ratio'] for r in rows))
-    sigma_values = sorted(set(r['sigma'] for r in rows))
-    
-    print(f"Found {len(rows)} records")
-    print(f"W values: {W_values}")
-    print(f"Seed values: {seed_values}")
-    print(f"Sigma values: {sigma_values}")
-    print("=" * 60)
-    
-    # Chart 1: PSNR vs W (averaged)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    W_psnrs = defaultdict(list)
+    for pattern in patterns:
+        files = glob.glob(pattern)
+        if not files:
+            print(f"⚠ No CSV files matched pattern: {pattern}")
+        for path in files:
+            with open(path, newline="") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rows.append({
+                        "image": r["image"],
+                        "W": float(r["W"]),
+                        "seed_ratio": float(r["seed_ratio"]),
+                        "sigma": float(r["sigma"]),
+                        "PSNR": float(r["PSNR"])
+                    })
+    return rows
+
+
+def compute_best_params_per_image(rows):
+    best = {}
     for r in rows:
-        W_psnrs[r['W']].append(r['PSNR'])
-    
-    Ws = sorted(W_psnrs.keys())
-    avg_psnrs = [np.mean(W_psnrs[W]) for W in Ws]
-    ax.plot(Ws, avg_psnrs, marker='o', linewidth=2, markersize=8, color='blue')
-    ax.set_xlabel('W (LIP Power)', fontsize=12)
-    ax.set_ylabel('Average PSNR (dB)', fontsize=12)
-    ax.set_title('PSNR vs LIP Power W (averaged over seed_ratio and sigma)', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, 'psnr_vs_W_avg.png'), dpi=150)
-    print('✓ Saved: psnr_vs_W_avg.png')
-    plt.close()
-    
-    # Chart 2: PSNR vs seed_ratio (averaged)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    seed_psnrs = defaultdict(list)
+        img = r["image"]
+        if img not in best or r["PSNR"] > best[img]["PSNR"]:
+            best[img] = r
+    return best
+
+
+def compute_global_best(rows):
+    return max(rows, key=lambda r: r["PSNR"])
+
+
+def average_psnr_by_param(rows, key):
+    groups = defaultdict(list)
     for r in rows:
-        seed_psnrs[r['seed_ratio']].append(r['PSNR'])
-    
-    seeds = sorted(seed_psnrs.keys())
-    avg_psnrs = [np.mean(seed_psnrs[s]) for s in seeds]
-    ax.plot(seeds, avg_psnrs, marker='s', linewidth=2, markersize=8, color='green')
-    ax.set_xlabel('Seed Ratio', fontsize=12)
-    ax.set_ylabel('Average PSNR (dB)', fontsize=12)
-    ax.set_title('PSNR vs Seed Ratio (averaged over W and sigma)', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
+        groups[r[key]].append(r["PSNR"])
+    X = sorted(groups.keys())
+    Y = [np.mean(groups[x]) for x in X]
+    return X, Y
+
+
+def plot_curve(x, y, xlabel, ylabel, title, save_path):
+    plt.figure(figsize=(8, 5))
+    plt.plot(x, y, marker="o")
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.grid(True)
     plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, 'psnr_vs_seed_avg.png'), dpi=150)
-    print('✓ Saved: psnr_vs_seed_avg.png')
+    plt.savefig(save_path)
     plt.close()
-    
-    # Chart 3: PSNR vs sigma (averaged)
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sigma_psnrs = defaultdict(list)
-    for r in rows:
-        sigma_psnrs[r['sigma']].append(r['PSNR'])
-    
-    sigmas = sorted(sigma_psnrs.keys())
-    avg_psnrs = [np.mean(sigma_psnrs[s]) for s in sigmas]
-    ax.plot(sigmas, avg_psnrs, marker='^', linewidth=2, markersize=8, color='red')
-    ax.set_xlabel('Sigma', fontsize=12)
-    ax.set_ylabel('Average PSNR (dB)', fontsize=12)
-    ax.set_title('PSNR vs Sigma (averaged over W and seed_ratio)', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, 'psnr_vs_sigma_avg.png'), dpi=150)
-    print('✓ Saved: psnr_vs_sigma_avg.png')
-    plt.close()
-    
-    # Chart 4: Heatmap - W vs seed_ratio (fixed sigma)
-    if len(sigma_values) > 0:
-        for sigma in [sigma_values[0]]:  # Show first sigma
-            fig, ax = plt.subplots(figsize=(10, 6))
-            psnr_matrix = np.zeros((len(seed_values), len(W_values)))
-            
-            for i, seed in enumerate(seed_values):
-                for j, W in enumerate(W_values):
-                    matching = [r for r in rows if r['W'] == W and r['seed_ratio'] == seed and r['sigma'] == sigma]
-                    if matching:
-                        psnr_matrix[i, j] = matching[0]['PSNR']
-            
-            im = ax.imshow(psnr_matrix, cmap='RdYlGn', aspect='auto', origin='lower')
-            ax.set_xticks(range(len(W_values)))
-            ax.set_yticks(range(len(seed_values)))
-            ax.set_xticklabels([f'{w:.0f}' for w in W_values])
-            ax.set_yticklabels([f'{s:.3f}' for s in seed_values])
-            ax.set_xlabel('W (LIP Power)', fontsize=12)
-            ax.set_ylabel('Seed Ratio', fontsize=12)
-            ax.set_title(f'PSNR Heatmap: W vs Seed Ratio (sigma={sigma})', fontsize=14, fontweight='bold')
-            
-            # Add text annotations
-            for i in range(len(seed_values)):
-                for j in range(len(W_values)):
-                    if psnr_matrix[i, j] > 0:
-                        text = ax.text(j, i, f'{psnr_matrix[i, j]:.2f}',
-                                      ha="center", va="center", color="black", fontsize=9)
-            
-            cbar = plt.colorbar(im, ax=ax)
-            cbar.set_label('PSNR (dB)', fontsize=11)
-            plt.tight_layout()
-            plt.savefig(os.path.join(out_dir, f'psnr_heatmap_W_seed_sigma{sigma}.png'), dpi=150)
-            print(f'✓ Saved: psnr_heatmap_W_seed_sigma{sigma}.png')
-            plt.close()
-    
-    print("=" * 60)
-    print(f'✓ All charts saved to: {out_dir}')
+    print(f"✓ Saved plot: {save_path}")
+
+
+def generate_plots(rows, outdir):
+    # Plot vs W
+    X, Y = average_psnr_by_param(rows, "W")
+    plot_curve(X, Y, "W", "PSNR (dB)", "PSNR vs W", os.path.join(outdir, "psnr_vs_W.png"))
+
+    # Plot vs seed ratio
+    X, Y = average_psnr_by_param(rows, "seed_ratio")
+    plot_curve(X, Y, "Seed Ratio", "PSNR (dB)", "PSNR vs Seed Ratio", os.path.join(outdir, "psnr_vs_seed.png"))
+
+    # Plot vs sigma
+    X, Y = average_psnr_by_param(rows, "sigma")
+    plot_curve(X, Y, "Sigma", "PSNR (dB)", "PSNR vs Sigma", os.path.join(outdir, "psnr_vs_sigma.png"))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot parameter sweep results")
-    parser.add_argument("--csv", default="results/param_sweep/results.csv", help="Path to results CSV file")
+    import argparse
+    parser = argparse.ArgumentParser(description="Plot sweep results for multiple images")
+    parser.add_argument("--csvs", nargs="+", required=True, help="List of CSV file patterns (use quotes)")
     parser.add_argument("--output", default="results/param_sweep", help="Output directory for charts")
-    
     args = parser.parse_args()
-    plot_sweep(args.csv, args.output)
+
+    os.makedirs(args.output, exist_ok=True)
+
+    rows = load_all_csv(args.csvs)
+
+    if not rows:
+        raise RuntimeError("No CSV rows found. Check your --csvs pattern!")
+
+    # Best per image
+    best_per_image = compute_best_params_per_image(rows)
+    print("\n===== Best Parameters Per Image =====")
+    for img, r in best_per_image.items():
+        print(img, "→", r)
+
+    # Global best
+    best_global = compute_global_best(rows)
+    print("\n===== Global Best Parameter Set =====")
+    print(best_global)
+
+    # Create plots
+    generate_plots(rows, args.output)
+
+    print("\nAll plots saved.")
